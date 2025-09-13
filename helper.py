@@ -250,7 +250,6 @@ def train_evaluate_model_cv(model, model_name, X, y,
         if hasattr(model, 'seed'):
             model.set_params(seed=seed)
 
-    # Create or extend pipeline with preprocessor and model
     if isinstance(preprocessor, Pipeline):
         # If preprocessor is already a pipeline, append the model to it
         preprocessor.steps.append(('model', model))
@@ -264,6 +263,7 @@ def train_evaluate_model_cv(model, model_name, X, y,
     else:
         # No preprocessor, just use the model
         pipeline = model
+
 
     # Scoring metrics for cross-validation (using macro averaging)
     scoring = {
@@ -297,23 +297,60 @@ def train_evaluate_model_cv(model, model_name, X, y,
     return metrics
 
 
+# def train_evaluate_models_cv(models: list, X, y, preprocessor=None, cv=5, seed=None):
+#     all_metrics = {}
+
+#     # если препроцессор не передали → создаём заглушку
+#     if preprocessor is None:
+#         base_preprocessor = Pipeline([
+#             ('nothing', FunctionTransformer())
+#             ])
+#         base_preprocessor.set_output(transform="pandas")
+#     else:
+#         base_preprocessor = preprocessor
+
+#     for model_name, model in models:
+#         current_model = clone(model)
+#         current_preprocessor = clone(base_preprocessor)
+#         all_metrics[model_name] = train_evaluate_model_cv(
+#             current_model,
+#             model_name,
+#             X,
+#             y,
+#             current_preprocessor,
+#             cv,
+#             seed
+#         )
+
+#     metrics_df = pd.DataFrame.from_dict(all_metrics, orient="index")
+#     plt.figure(figsize=(8, 4))
+#     sns.heatmap(metrics_df, cmap="RdBu_r", annot=True, fmt=".2f")
+#     plt.title("Model Evaluation Metrics Comparison")
+#     plt.tight_layout()
+#     plt.show()
+
+#     return metrics_df
+
+
 def train_evaluate_models_cv(models: list, X, y, preprocessor=None, cv=5, seed=None):
+    # Dictionary to store all metrics
     all_metrics = {}
 
-    if preprocessor is None:
-        preprocessor = FunctionTransformer()
-        preprocessor.set_output(transform="pandas")
-
     for model_name, model in models:
+        # Работаем с копией модели, чтобы не изменять исходные модели, переданные в качестве аргументов
         current_model = clone(model)
-        current_preprocessor = clone(preprocessor) if preprocessor is not None else None
-
+        if isinstance(preprocessor, Pipeline):
+            current_preprocessor = clone(preprocessor)
+        else:
+            current_preprocessor = None
+        # Store metrics
         all_metrics[model_name] = train_evaluate_model_cv(
-            current_model, model_name, X, y, current_preprocessor, cv, seed
-        )
+            current_model, model_name, X, y, current_preprocessor, cv, seed)
 
+    # Convert metrics to DataFrame
     metrics_df = pd.DataFrame.from_dict(all_metrics, orient='index')
 
+    # Plot heatmap
     plt.figure(figsize=(8, 4))
     sns.heatmap(metrics_df, cmap='RdBu_r', annot=True, fmt=".2f")
     plt.title('Model Evaluation Metrics Comparison')
@@ -321,32 +358,6 @@ def train_evaluate_models_cv(models: list, X, y, preprocessor=None, cv=5, seed=N
     plt.show()
 
     return metrics_df
-
-
-# def train_evaluate_models_cv(models: list, X, y, preprocessor=None, cv=5, seed=None):
-#     # Dictionary to store all metrics
-#     all_metrics = {}
-
-#     for model_name, model in models:
-#         # Работаем с копией модели, чтобы не изменять исходные модели, переданные в качестве аргументов
-#         current_model = clone(model)
-#         current_preprocessor = clone(preprocessor)
-
-#         # Store metrics
-#         all_metrics[model_name] = train_evaluate_model_cv(
-#             current_model, model_name, X, y, current_preprocessor, cv, seed)
-
-#     # Convert metrics to DataFrame
-#     metrics_df = pd.DataFrame.from_dict(all_metrics, orient='index')
-
-#     # Plot heatmap
-#     plt.figure(figsize=(8, 4))
-#     sns.heatmap(metrics_df, cmap='RdBu_r', annot=True, fmt=".2f")
-#     plt.title('Model Evaluation Metrics Comparison')
-#     plt.tight_layout()
-#     plt.show()
-
-#     return metrics_df
 
 
 def train_evaluate_models(models: list, X_train, y_train, X_test, y_test, seed=None):
