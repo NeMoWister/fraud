@@ -456,117 +456,117 @@ def train_evaluate_models_cv_regression(models, X, y, cv, preprocessor=None, see
     return df
 
 
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
-from catboost import CatBoostClassifier, Pool
+# import numpy as np
+# import pandas as pd
+# from sklearn.model_selection import train_test_split
+# from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
+# from catboost import CatBoostClassifier, Pool
 
-def prune_features_catboost(X, y, cat_features=None, test_size=0.3, seed=42,
-                             iterations=1000, early_stopping_rounds=50,
-                             min_change_pct=10.0, verbose=True, random_state=42):
-    if not isinstance(X, pd.DataFrame):
-        X = pd.DataFrame(X)
-    y = pd.Series(y).reset_index(drop=True)
-    classes = np.unique(y)
-    if len(classes) != 2:
-        raise ValueError("Только бинарная классификация поддерживается.")
-    mapping = {classes[0]: 0, classes[1]: 1}
-    y_bin = y.map(mapping).astype(int)
-    X_train, X_val, y_train, y_val = train_test_split(X, y_bin, test_size=test_size,
-                                                      stratify=y_bin, random_state=seed)
-    current_features = list(X.columns)
-    if cat_features is None:
-        cat_feat_names = None
-    else:
-        if all(isinstance(cf, int) for cf in cat_features):
-            cat_feat_names = [X.columns[i] for i in cat_features]
-        else:
-            cat_feat_names = [str(cf) for cf in cat_features]
-        cat_feat_names = [f for f in cat_feat_names if f in current_features]
-    history = []
-    while True:
-        train_pool = Pool(X_train[current_features], y_train, cat_features=cat_feat_names)
-        val_pool = Pool(X_val[current_features], y_val, cat_features=cat_feat_names)
-        model = CatBoostClassifier(iterations=iterations, random_seed=random_state,
-                                   early_stopping_rounds=early_stopping_rounds, verbose=False)
-        model.fit(train_pool, eval_set=val_pool)
-        proba = model.predict_proba(X_val[current_features])[:, 1]
-        preds = model.predict(X_val[current_features])
-        metrics_before = {
-            'roc_auc': float(roc_auc_score(y_val, proba)),
-            'f1': float(f1_score(y_val, preds)),
-            'precision': float(precision_score(y_val, preds)),
-            'recall': float(recall_score(y_val, preds))
-        }
-        importances = model.get_feature_importance(train_pool)
-        print(importances)
-        print('_'*50)
-        if len(importances) != len(current_features):
-            raise RuntimeError("Feature importance length mismatch.")
-        idx_least = int(np.argmin(importances))
-        feature_to_drop = current_features[idx_least]
-        if len(current_features) == 1:
-            if verbose:
-                print("Остался один признак — прекращаю.")
-            break
-        next_features = [f for f in current_features if f != feature_to_drop]
-        next_cat_feat_names = None if cat_feat_names is None else [f for f in cat_feat_names if f in next_features]
-        train_pool_next = Pool(X_train[next_features], y_train, cat_features=next_cat_feat_names)
-        val_pool_next = Pool(X_val[next_features], y_val, cat_features=next_cat_feat_names)
-        model_next = CatBoostClassifier(iterations=iterations, random_seed=random_state,
-                                        early_stopping_rounds=early_stopping_rounds, verbose=False)
-        model_next.fit(train_pool_next, eval_set=val_pool_next)
-        proba_next = model_next.predict_proba(X_val[next_features])[:, 1]
-        preds_next = model_next.predict(X_val[next_features])
-        metrics_after = {
-            'roc_auc': float(roc_auc_score(y_val, proba_next)),
-            'f1': float(f1_score(y_val, preds_next)),
-            'precision': float(precision_score(y_val, preds_next)),
-            'recall': float(recall_score(y_val, preds_next))
-        }
-        eps = 1e-8
-        pct_changes = {}
-        for k in metrics_before.keys():
-            denom = max(abs(metrics_before[k]), eps)
-            pct_changes[k] = 100.0 * (metrics_after[k] - metrics_before[k]) / denom
-        max_abs_pct = max(abs(v) for v in pct_changes.values())
-        history.append({
-            'dropped_feature': feature_to_drop,
-            'n_features_before': len(current_features),
-            'metrics_before': metrics_before,
-            'metrics_after': metrics_after,
-            'pct_change': pct_changes,
-            'max_abs_pct_change': max_abs_pct
-        })
-        if verbose:
-            print(f"Удалён: {feature_to_drop} | max_abs_pct_change = {max_abs_pct:.2f}%")
-        if max_abs_pct > min_change_pct:
-            if verbose:
-                print(f"Остановка: при удалении '{feature_to_drop}' максимальное изменение {max_abs_pct:.2f}% < {min_change_pct}%")
-            break
-        current_features = next_features
-        cat_feat_names = next_cat_feat_names
-    history_df = pd.DataFrame([{
-        'dropped_feature': h['dropped_feature'],
-        'n_features_before': h['n_features_before'],
-        'roc_before': h['metrics_before']['roc_auc'],
-        'roc_after': h['metrics_after']['roc_auc'],
-        'roc_pct_change': h['pct_change']['roc_auc'],
-        'f1_before': h['metrics_before']['f1'],
-        'f1_after': h['metrics_after']['f1'],
-        'f1_pct_change': h['pct_change']['f1'],
-        'precision_before': h['metrics_before']['precision'],
-        'precision_after': h['metrics_after']['precision'],
-        'precision_pct_change': h['pct_change']['precision'],
-        'recall_before': h['metrics_before']['recall'],
-        'recall_after': h['metrics_after']['recall'],
-        'recall_pct_change': h['pct_change']['recall'],
-        'max_abs_pct_change': h['max_abs_pct_change']
-    } for h in history])
-    result = {
-        'final_features': current_features,
-        'history': history_df,
-        'last_metrics': history[-1]['metrics_after'] if len(history) > 0 else None
-    }
-    return result
+# def prune_features_catboost(X, y, cat_features=None, test_size=0.3, seed=42,
+#                              iterations=1000, early_stopping_rounds=50,
+#                              min_change_pct=10.0, verbose=True, random_state=42):
+#     if not isinstance(X, pd.DataFrame):
+#         X = pd.DataFrame(X)
+#     y = pd.Series(y).reset_index(drop=True)
+#     classes = np.unique(y)
+#     if len(classes) != 2:
+#         raise ValueError("Только бинарная классификация поддерживается.")
+#     mapping = {classes[0]: 0, classes[1]: 1}
+#     y_bin = y.map(mapping).astype(int)
+#     X_train, X_val, y_train, y_val = train_test_split(X, y_bin, test_size=test_size,
+#                                                       stratify=y_bin, random_state=seed)
+#     current_features = list(X.columns)
+#     if cat_features is None:
+#         cat_feat_names = None
+#     else:
+#         if all(isinstance(cf, int) for cf in cat_features):
+#             cat_feat_names = [X.columns[i] for i in cat_features]
+#         else:
+#             cat_feat_names = [str(cf) for cf in cat_features]
+#         cat_feat_names = [f for f in cat_feat_names if f in current_features]
+#     history = []
+#     while True:
+#         train_pool = Pool(X_train[current_features], y_train, cat_features=cat_feat_names)
+#         val_pool = Pool(X_val[current_features], y_val, cat_features=cat_feat_names)
+#         model = CatBoostClassifier(iterations=iterations, random_seed=random_state,
+#                                    early_stopping_rounds=early_stopping_rounds, verbose=False)
+#         model.fit(train_pool, eval_set=val_pool)
+#         proba = model.predict_proba(X_val[current_features])[:, 1]
+#         preds = model.predict(X_val[current_features])
+#         metrics_before = {
+#             'roc_auc': float(roc_auc_score(y_val, proba)),
+#             'f1': float(f1_score(y_val, preds)),
+#             'precision': float(precision_score(y_val, preds)),
+#             'recall': float(recall_score(y_val, preds))
+#         }
+#         importances = model.get_feature_importance(train_pool)
+#         print(importances)
+#         print('_'*50)
+#         if len(importances) != len(current_features):
+#             raise RuntimeError("Feature importance length mismatch.")
+#         idx_least = int(np.argmin(importances))
+#         feature_to_drop = current_features[idx_least]
+#         if len(current_features) == 1:
+#             if verbose:
+#                 print("Остался один признак — прекращаю.")
+#             break
+#         next_features = [f for f in current_features if f != feature_to_drop]
+#         next_cat_feat_names = None if cat_feat_names is None else [f for f in cat_feat_names if f in next_features]
+#         train_pool_next = Pool(X_train[next_features], y_train, cat_features=next_cat_feat_names)
+#         val_pool_next = Pool(X_val[next_features], y_val, cat_features=next_cat_feat_names)
+#         model_next = CatBoostClassifier(iterations=iterations, random_seed=random_state,
+#                                         early_stopping_rounds=early_stopping_rounds, verbose=False)
+#         model_next.fit(train_pool_next, eval_set=val_pool_next)
+#         proba_next = model_next.predict_proba(X_val[next_features])[:, 1]
+#         preds_next = model_next.predict(X_val[next_features])
+#         metrics_after = {
+#             'roc_auc': float(roc_auc_score(y_val, proba_next)),
+#             'f1': float(f1_score(y_val, preds_next)),
+#             'precision': float(precision_score(y_val, preds_next)),
+#             'recall': float(recall_score(y_val, preds_next))
+#         }
+#         eps = 1e-8
+#         pct_changes = {}
+#         for k in metrics_before.keys():
+#             denom = max(abs(metrics_before[k]), eps)
+#             pct_changes[k] = 100.0 * (metrics_after[k] - metrics_before[k]) / denom
+#         max_abs_pct = max(abs(v) for v in pct_changes.values())
+#         history.append({
+#             'dropped_feature': feature_to_drop,
+#             'n_features_before': len(current_features),
+#             'metrics_before': metrics_before,
+#             'metrics_after': metrics_after,
+#             'pct_change': pct_changes,
+#             'max_abs_pct_change': max_abs_pct
+#         })
+#         if verbose:
+#             print(f"Удалён: {feature_to_drop} | max_abs_pct_change = {max_abs_pct:.2f}%")
+#         if max_abs_pct > min_change_pct:
+#             if verbose:
+#                 print(f"Остановка: при удалении '{feature_to_drop}' максимальное изменение {max_abs_pct:.2f}% < {min_change_pct}%")
+#             break
+#         current_features = next_features
+#         cat_feat_names = next_cat_feat_names
+#     history_df = pd.DataFrame([{
+#         'dropped_feature': h['dropped_feature'],
+#         'n_features_before': h['n_features_before'],
+#         'roc_before': h['metrics_before']['roc_auc'],
+#         'roc_after': h['metrics_after']['roc_auc'],
+#         'roc_pct_change': h['pct_change']['roc_auc'],
+#         'f1_before': h['metrics_before']['f1'],
+#         'f1_after': h['metrics_after']['f1'],
+#         'f1_pct_change': h['pct_change']['f1'],
+#         'precision_before': h['metrics_before']['precision'],
+#         'precision_after': h['metrics_after']['precision'],
+#         'precision_pct_change': h['pct_change']['precision'],
+#         'recall_before': h['metrics_before']['recall'],
+#         'recall_after': h['metrics_after']['recall'],
+#         'recall_pct_change': h['pct_change']['recall'],
+#         'max_abs_pct_change': h['max_abs_pct_change']
+#     } for h in history])
+#     result = {
+#         'final_features': current_features,
+#         'history': history_df,
+#         'last_metrics': history[-1]['metrics_after'] if len(history) > 0 else None
+#     }
+#     return result
